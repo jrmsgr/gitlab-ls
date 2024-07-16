@@ -228,7 +228,7 @@ async def fetch_database(params: types.InitializeParams):
 
 @server.feature(
     types.TEXT_DOCUMENT_COMPLETION,
-    types.CompletionOptions(trigger_characters=["!", "#", "@"]),
+    types.CompletionOptions(trigger_characters=["!", "#"]),
 )
 def completions(params: types.CompletionParams):
     items = []
