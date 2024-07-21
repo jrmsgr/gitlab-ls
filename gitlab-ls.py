@@ -184,11 +184,11 @@ class GitlabLanguageServer(LanguageServer):
 
         for issue in issues:
             issue_dict[issue.iid] = GitlabIssue(
-                    id=issue.iid,
-                    title=issue.title,
-                    author=issue.author["name"],
-                    open=(issue.state == "opened"),
-                )
+                id=issue.iid,
+                title=issue.title,
+                author=issue.author["name"],
+                open=(issue.state == "opened"),
+            )
         logging.debug(f"Got {len(issue_dict.keys())} results")
         return issue_dict
 
@@ -204,11 +204,11 @@ class GitlabLanguageServer(LanguageServer):
             merge_requests = project.mergerequests.list(created_after=created_after)
         for mr in merge_requests:
             merge_request_dict[mr.iid] = GitlabIssue(
-                    id=mr.iid,
-                    title=mr.title,
-                    author=mr.author["name"],
-                    open=(mr.state == "opened"),
-                )
+                id=mr.iid,
+                title=mr.title,
+                author=mr.author["name"],
+                open=(mr.state == "opened"),
+            )
         logging.debug(f"Got {len(merge_request_dict.keys())} results")
         return merge_request_dict
 
@@ -250,10 +250,17 @@ def completions(ls: GitlabLanguageServer, params: types.CompletionParams):
             return []
     return items
 
-@server.feature(types.TEXT_DOCUMENT_DIAGNOSTIC,
-                types.DiagnosticOptions(identifier=server.name, inter_file_dependencies=False, workspace_diagnostics=False))
+
+@server.feature(
+    types.TEXT_DOCUMENT_DIAGNOSTIC,
+    types.DiagnosticOptions(
+        identifier=server.name,
+        inter_file_dependencies=False,
+        workspace_diagnostics=False,
+    ),
+)
 def diagnostics(ls: GitlabLanguageServer, params: types.DocumentDiagnosticParams):
-    gitlab_url_regex = re.compile(r'\b' + f"{ls.client.url}" + r'/([^ ]+)/-/(issues|merge_requests)/(\d+)\b')
+    gitlab_url_regex = re.compile(r"\b" + f"{ls.client.url}" + r"/([^ ]+)/-/(issues|merge_requests)/(\d+)\b")
     doc = ls.workspace.get_text_document(params.text_document.uri)
     diagnostics = []
     for line_nr, line in enumerate(doc.lines):
@@ -263,7 +270,7 @@ def diagnostics(ls: GitlabLanguageServer, params: types.DocumentDiagnosticParams
             if project_path not in ls.projects:
                 continue
             project = ls.projects[project_path]
-            is_issue = (m.group(2) == "issues")
+            is_issue = m.group(2) == "issues"
             iid = int(m.group(3))
             if is_issue:
                 if iid not in project.issues:
@@ -276,13 +283,20 @@ def diagnostics(ls: GitlabLanguageServer, params: types.DocumentDiagnosticParams
 
             message = "open" if is_open else "closed"
             severity = types.DiagnosticSeverity.Information if is_open else types.DiagnosticSeverity.Error
-                
+
             start = types.Position(line=line_nr, character=m.start())
             end = types.Position(line=line_nr, character=m.end())
-            diagnostics.append(types.Diagnostic(range=types.Range(start = start, end = end), message=message, severity=severity))
+            diagnostics.append(
+                types.Diagnostic(
+                    range=types.Range(start=start, end=end),
+                    message=message,
+                    severity=severity,
+                )
+            )
             # logging.debug(f"{project_name}: {is_issue}, {iid}")
-            
-    return types.RelatedFullDocumentDiagnosticReport(items = diagnostics)
+
+    return types.RelatedFullDocumentDiagnosticReport(items=diagnostics)
+
 
 if __name__ == "__main__":
     server.start_io()
