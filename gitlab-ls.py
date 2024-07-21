@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from dataclasses_json import dataclass_json
 import logging
 import gitlab
-from typing import List, Dict, Any
-from gitlab.v4.objects import Project, projects
+from typing import List, Dict, Any, Optional
+from gitlab.v4.objects import Project
 from pygls.server import LanguageServer
 from lsprotocol import types
 import json
 import datetime
 import os
+import re
 
 
 @dataclass_json
@@ -52,8 +53,8 @@ class GitlabProject:
     id: int
     path: str
     last_update: str
-    issues: List[GitlabIssue]
-    merge_requests: List[GitlabMergeRequest]
+    issues: Dict[int, GitlabIssue]
+    merge_requests: Dict[int, GitlabMergeRequest]
 
 
 class EnhancedJSONEncoder(json.JSONEncoder):
@@ -112,11 +113,11 @@ class GitlabLanguageServer(LanguageServer):
 
     def update_project(self, project_name: str) -> None:
         project = self.projects[project_name]
-        project.issues += self.get_issue_list(
+        project.issues |= self.get_issue_dict(
             project=self.client.projects.get(project.id),
             created_after=project.last_update,
         )
-        project.merge_requests += self.get_merge_request_list(
+        project.merge_requests |= self.get_merge_request_dict(
             project=self.client.projects.get(project.id),
             created_after=project.last_update,
         )
@@ -136,13 +137,13 @@ class GitlabLanguageServer(LanguageServer):
                     progress,
                     f"Fetching missing project: {fetched_project.path_with_namespace}",
                 )
-                issue_list = self.get_issue_list(fetched_project)
-                merge_request_list = self.get_merge_request_list(fetched_project)
+                issue_dict = self.get_issue_dict(fetched_project)
+                merge_request_dict = self.get_merge_request_dict(fetched_project)
                 project = GitlabProject(
                     id=fetched_project.id,
                     path=fetched_project.path_with_namespace,
-                    issues=issue_list,
-                    merge_requests=merge_request_list,
+                    issues=issue_dict,
+                    merge_requests=merge_request_dict,
                     last_update=self.get_timestamp(),
                 )
                 self.projects[project.path] = project
@@ -172,8 +173,8 @@ class GitlabLanguageServer(LanguageServer):
         )
 
     @staticmethod
-    def get_issue_list(project: Project, created_after: str = None) -> List[GitlabIssue]:
-        issue_list = []
+    def get_issue_dict(project: Project, created_after: str = None) -> Dict[int, GitlabIssue]:
+        issue_dict = {}
 
         logging.debug(f"Getting issue list for project: {project.path_with_namespace} from date: {created_after}")
         if created_after is None:
@@ -182,20 +183,18 @@ class GitlabLanguageServer(LanguageServer):
             issues = project.issues.list(created_after=created_after)
 
         for issue in issues:
-            issue_list.append(
-                GitlabIssue(
+            issue_dict[issue.iid] = GitlabIssue(
                     id=issue.iid,
                     title=issue.title,
                     author=issue.author["name"],
                     open=(issue.state == "opened"),
                 )
-            )
-        logging.debug(f"Got {len(issue_list)} results")
-        return issue_list
+        logging.debug(f"Got {len(issue_dict.keys())} results")
+        return issue_dict
 
     @staticmethod
-    def get_merge_request_list(project: Project, created_after: str = None) -> List[GitlabMergeRequest]:
-        merge_request_list = []
+    def get_merge_request_dict(project: Project, created_after: str = None) -> Dict[int, GitlabMergeRequest]:
+        merge_request_dict = {}
         logging.debug(
             f"Getting merge request list for project: {project.path_with_namespace} from date: {created_after}"
         )
@@ -204,16 +203,14 @@ class GitlabLanguageServer(LanguageServer):
         else:
             merge_requests = project.mergerequests.list(created_after=created_after)
         for mr in merge_requests:
-            merge_request_list.append(
-                GitlabIssue(
+            merge_request_dict[mr.iid] = GitlabIssue(
                     id=mr.iid,
                     title=mr.title,
                     author=mr.author["name"],
                     open=(mr.state == "opened"),
                 )
-            )
-        logging.debug(f"Got {len(merge_request_list)} results")
-        return merge_request_list
+        logging.debug(f"Got {len(merge_request_dict.keys())} results")
+        return merge_request_dict
 
 
 log_file = Path("/tmp/") / os.environ["USER"] / "gitlab-ls.log"
@@ -239,13 +236,13 @@ def completions(ls: GitlabLanguageServer, params: types.CompletionParams):
     match params.context.trigger_character:
         case "!":
             for project in ls.projects.values():
-                for merge_request in project.merge_requests:
+                for merge_request in project.merge_requests.values():
                     item = merge_request.to_completion_item()
                     item.label_details = types.CompletionItemLabelDetails(detail=project.path)
                     items.append(item)
         case "#":
             for project in ls.projects.values():
-                for issue in project.issues:
+                for issue in project.issues.values():
                     item = issue.to_completion_item()
                     item.label_details = types.CompletionItemLabelDetails(detail=project.path)
                     items.append(item)
@@ -253,6 +250,39 @@ def completions(ls: GitlabLanguageServer, params: types.CompletionParams):
             return []
     return items
 
+@server.feature(types.TEXT_DOCUMENT_DIAGNOSTIC,
+                types.DiagnosticOptions(identifier=server.name, inter_file_dependencies=False, workspace_diagnostics=False))
+def diagnostics(ls: GitlabLanguageServer, params: types.DocumentDiagnosticParams):
+    gitlab_url_regex = re.compile(r'\b' + f"{ls.client.url}" + r'/([^ ]+)/-/(issues|merge_requests)/(\d+)\b')
+    doc = ls.workspace.get_text_document(params.text_document.uri)
+    diagnostics = []
+    for line_nr, line in enumerate(doc.lines):
+        for m in gitlab_url_regex.finditer(line):
+            # logging.debug("Found link")
+            project_path = m.group(1)
+            if project_path not in ls.projects:
+                continue
+            project = ls.projects[project_path]
+            is_issue = (m.group(2) == "issues")
+            iid = int(m.group(3))
+            if is_issue:
+                if iid not in project.issues:
+                    continue
+                is_open = project.issues[iid].open
+            else:
+                if iid not in project.merge_requests:
+                    continue
+                is_open = project.merge_requests[iid].open
+
+            message = "open" if is_open else "closed"
+            severity = types.DiagnosticSeverity.Information if is_open else types.DiagnosticSeverity.Error
+                
+            start = types.Position(line=line_nr, character=m.start())
+            end = types.Position(line=line_nr, character=m.end())
+            diagnostics.append(types.Diagnostic(range=types.Range(start = start, end = end), message=message, severity=severity))
+            # logging.debug(f"{project_name}: {is_issue}, {iid}")
+            
+    return types.RelatedFullDocumentDiagnosticReport(items = diagnostics)
 
 if __name__ == "__main__":
     server.start_io()
