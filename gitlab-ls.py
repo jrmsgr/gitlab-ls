@@ -73,17 +73,20 @@ class WorkProgress:
         self.progress += self.increment
 
 
-class GitlabManager:
-    def __init__(self, gl: gitlab.Gitlab, ls: LanguageServer) -> None:
-        self.client = gl
-        self.ls = ls
+class GitlabLanguageServer(LanguageServer):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.client = None
         self.projects: Dict[str, GitlabProject] = {}
-        self.log_path = Path(os.environ["HOME"]) / ".local/share/gitlab-ls/state.json"
+        self.index_path = Path(os.environ["HOME"]) / ".local/share/gitlab-ls/index.json"
+
+    def init_gitlab(self, client: gitlab.Gitlab):
+        self.client = client
 
     def load_projects(self, projects: List[str]):
         progress = WorkProgress(token=1, increment=int(100 / len(projects)))
-        self.ls.progress.create(progress.token)
-        self.ls.progress.begin(
+        self.progress.create(progress.token)
+        self.progress.begin(
             progress.token,
             types.WorkDoneProgressBegin(title="Database load", message="Starting progress", percentage=0),
         )
@@ -105,7 +108,7 @@ class GitlabManager:
         if len(projects) > 0:
             self.fetch_projects(projects, progress)
         self.save_state()
-        self.ls.progress.end(progress.token, types.WorkDoneProgressEnd(message=f"Database loaded!"))
+        self.progress.end(progress.token, types.WorkDoneProgressEnd(message=f"Database loaded!"))
 
     def update_project(self, project_name: str) -> None:
         project = self.projects[project_name]
@@ -147,23 +150,23 @@ class GitlabManager:
                 self.report_progress(progress, f"Fetched project {project.path}")
 
     def save_state(self):
-        if not self.log_path.exists():
-            os.makedirs(self.log_path.parent, exist_ok=True)
-        with open(self.log_path, "w+") as fp:
+        if not self.index_path.exists():
+            os.makedirs(self.index_path.parent, exist_ok=True)
+        with open(self.index_path, "w+") as fp:
             projects = {}
             for name, project in self.projects.items():
                 projects[name] = project.to_dict()
             json.dump(projects, fp, indent=2)
 
     def load_state(self) -> Dict[Any, Any]:
-        if not self.log_path.exists():
+        if not self.index_path.exists():
             return {}
-        with open(self.log_path, "r") as fp:
-            logging.debug("Loading state.json")
+        with open(self.index_path, "r") as fp:
+            logging.debug(f"Loading {self.index_path}")
             return json.load(fp)
 
     def report_progress(self, progress: WorkProgress, msg: str):
-        self.ls.progress.report(
+        self.progress.report(
             progress.token,
             types.WorkDoneProgressReport(message=msg, percentage=progress.progress),
         )
@@ -216,31 +219,32 @@ class GitlabManager:
 log_file = Path("/tmp/") / os.environ["USER"] / "gitlab-ls.log"
 os.makedirs(log_file.parent, exist_ok=True)
 logging.basicConfig(filename=log_file, filemode="w", level=logging.DEBUG)
-server = LanguageServer("gitlab-ls", "v0.1")
-gl = gitlab.Gitlab.from_config("axelera", ["./config.cfg"])
-manager = GitlabManager(gl, server)
+server = GitlabLanguageServer("gitlab-ls", "v0.1")
 
 
 @server.feature(types.INITIALIZE)
-async def fetch_database(params: types.InitializeParams):
-    manager.load_projects(params.initialization_options["projects"])
+async def fetch_database(ls: GitlabLanguageServer, params: types.InitializeParams):
+    init_options = params.initialization_options
+    client = gitlab.Gitlab(url=init_options["url"], private_token=init_options["private_token"])
+    ls.init_gitlab(client)
+    ls.load_projects(init_options["projects"])
 
 
 @server.feature(
     types.TEXT_DOCUMENT_COMPLETION,
     types.CompletionOptions(trigger_characters=["!", "#"]),
 )
-def completions(params: types.CompletionParams):
+def completions(ls: GitlabLanguageServer, params: types.CompletionParams):
     items = []
     match params.context.trigger_character:
         case "!":
-            for project in manager.projects.values():
+            for project in ls.projects.values():
                 for merge_request in project.merge_requests:
                     item = merge_request.to_completion_item()
                     item.label_details = types.CompletionItemLabelDetails(detail=project.path)
                     items.append(item)
         case "#":
-            for project in manager.projects.values():
+            for project in ls.projects.values():
                 for issue in project.issues:
                     item = issue.to_completion_item()
                     item.label_details = types.CompletionItemLabelDetails(detail=project.path)
