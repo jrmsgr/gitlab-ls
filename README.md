@@ -17,9 +17,13 @@ vim.api.nvim_create_autocmd("FileType", {
             name = "gitlab-ls",
             cmd = { "path/to/gitlab-ls.py" },
             init_options = {
+                -- URL of the gitlab instance hosting the projects
+                url = "https://my.gitlab.repo",
+                -- Private token to access the gitlab instance
+                -- For better safety, use a read-only token
+                private_token= "<MY_PRIVATE_TOKEN>",
                 -- Your list of project paths you want to load
                 -- For example if a project URL is https://my.gitlab.repo/project/path
-                -- and that the site url specified in config.cfg is 'https://my.gitlab.repo'
                 -- put 'project/path' in this list
                 projects = { "project/path" },
             },
