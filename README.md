@@ -10,6 +10,25 @@ pip3 install -r requirements.txt
 - Configure your editor to start gitlab-ls. Example neovim config:
 ```lua
 local cmp = require("cmp")
+cmp.event:on("confirm_done", function(evt) -- Replace title with url
+    if evt.entry.source.name == "nvim_lsp" then
+        if evt.entry.source.source.client.name == "gitlab-ls" then
+            local line = evt.entry.source_insert_range.start.line
+            local start_col = evt.entry.source_insert_range.start.character - 1
+            local end_col = start_col + string.len(evt.entry.completion_item.label)
+            local text = string.match(evt.entry.completion_item.label, "^[^ ]+")
+            local prefix = string.sub(text, 1, 1)
+            vim.api.nvim_buf_set_text(0, line, start_col, line, end_col, {
+                evt.entry.source.source.client.config.init_options.url
+                    .. "/"
+                    .. evt.entry.completion_item.labelDetails.detail
+                    .. "/-/"
+                .. ((prefix == "!") and "merge_requests/" or "issues/")
+                    .. string.sub(text, 2, -1),
+            })
+        end
+    end
+end)
 vim.api.nvim_create_autocmd("FileType", {
     pattern = "text",
     callback = function()
