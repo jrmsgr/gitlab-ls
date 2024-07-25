@@ -115,11 +115,11 @@ class GitlabLanguageServer(LanguageServer):
         project = self.projects[project_name]
         project.issues |= self.get_issue_dict(
             project=self.client.projects.get(project.id),
-            created_after=project.last_update,
+            updated_after=project.last_update,
         )
         project.merge_requests |= self.get_merge_request_dict(
             project=self.client.projects.get(project.id),
-            created_after=project.last_update,
+            updated_after=project.last_update,
         )
         project.last_update = self.get_timestamp()
         self.projects[project_name] = project
@@ -173,14 +173,14 @@ class GitlabLanguageServer(LanguageServer):
         )
 
     @staticmethod
-    def get_issue_dict(project: Project, created_after: str = None) -> Dict[int, GitlabIssue]:
+    def get_issue_dict(project: Project, updated_after: str = None) -> Dict[int, GitlabIssue]:
         issue_dict = {}
 
-        logging.debug(f"Getting issue list for project: {project.path_with_namespace} from date: {created_after}")
-        if created_after is None:
-            issues = project.issues.list(get_all=True)
+        logging.debug(f"Getting issue list for project: {project.path_with_namespace} from date: {updated_after}")
+        if updated_after is None:
+            issues = project.issues.list(iterator=True, get_all=True)
         else:
-            issues = project.issues.list(created_after=created_after)
+            issues = project.issues.list(iterator=True, updated_after=updated_after)
 
         for issue in issues:
             issue_dict[issue.iid] = GitlabIssue(
@@ -193,22 +193,27 @@ class GitlabLanguageServer(LanguageServer):
         return issue_dict
 
     @staticmethod
-    def get_merge_request_dict(project: Project, created_after: str = None) -> Dict[int, GitlabMergeRequest]:
+    def get_merge_request_dict(project: Project, updated_after: str = None) -> Dict[int, GitlabMergeRequest]:
         merge_request_dict = {}
         logging.debug(
-            f"Getting merge request list for project: {project.path_with_namespace} from date: {created_after}"
+            f"Getting merge request list for project: {project.path_with_namespace} from date: {updated_after}"
         )
-        if created_after is None:
-            merge_requests = project.mergerequests.list(get_all=True)
+        if updated_after is None:
+            merge_requests = project.mergerequests.list(iterator=True, get_all=True)
         else:
-            merge_requests = project.mergerequests.list(created_after=created_after)
+            merge_requests = project.mergerequests.list(iterator= True, updated_after=updated_after)
+            logging.debug(f"Updated after={updated_after}")
         for mr in merge_requests:
+            logging.debug(f"Got mr: {mr.iid}-{mr.title}-{mr.state}")
             merge_request_dict[mr.iid] = GitlabIssue(
                 id=mr.iid,
                 title=mr.title,
                 author=mr.author["name"],
                 open=(mr.state == "opened"),
             )
+            if mr.iid ==886:
+                logging.debug(f"{mr}")
+                logging.debug(f"{merge_request_dict[mr.iid]}")
         logging.debug(f"Got {len(merge_request_dict.keys())} results")
         return merge_request_dict
 
