@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-import asyncio
-import dataclasses
 from pathlib import Path
 from dataclasses import dataclass
 from dataclasses_json import dataclass_json
@@ -43,13 +41,6 @@ class GitlabProject:
     merge_requests: Dict[int, GitlabIssue]
 
 
-class EnhancedJSONEncoder(json.JSONEncoder):
-    def default(self, o):
-        if dataclasses.is_dataclass(o):
-            return o.to_json()
-        return super().default(o)
-
-
 @dataclass
 class WorkProgress:
     token: int
@@ -69,7 +60,9 @@ class GitlabLanguageServer(LanguageServer):
 
     def init_gitlab(self, client: gitlab.Gitlab):
         self.client = client
-        self.gitlab_url_regex = re.compile(r"\b" + f"{self.client.url}" + r"/([^ ]+)/-/(issues|merge_requests)/(\d+)\b")
+        self.gitlab_url_regex = re.compile(
+            r"\b" + f"{self.client.url}" + r"/([^ ]+)/-/(issues|merge_requests)/(\d+)\b"
+        )
 
     def get_issue_from_url_match(self, m: re.Match[str] | None) -> Optional[GitlabIssue]:
         if m is None:
@@ -102,7 +95,9 @@ class GitlabLanguageServer(LanguageServer):
         self.progress.create(progress.token)
         self.progress.begin(
             progress.token,
-            types.WorkDoneProgressBegin(title="Database load", message="Starting progress", percentage=0),
+            types.WorkDoneProgressBegin(
+                title="Database load", message="Starting progress", percentage=0
+            ),
         )
         cache = self.load_state()
         for project_name in cache:
@@ -125,6 +120,8 @@ class GitlabLanguageServer(LanguageServer):
         self.progress.end(progress.token, types.WorkDoneProgressEnd(message=f"Database loaded!"))
 
     def update_project(self, project_name: str) -> None:
+        if self.client is None:
+            return
         project = self.projects[project_name]
         project.issues |= self.get_issue_dict(
             project=self.client.projects.get(project.id),
@@ -143,6 +140,8 @@ class GitlabLanguageServer(LanguageServer):
 
     def fetch_projects(self, project_paths: List, progress: WorkProgress) -> None:
         self.report_progress(progress, "Fetching missing projects")
+        if self.client is None:
+            return
         for fetched_project in self.client.projects.list(get_all=True):
             if fetched_project.path_with_namespace in project_paths:
                 logging.debug(f"Found project: {fetched_project.path_with_namespace}")
@@ -186,10 +185,12 @@ class GitlabLanguageServer(LanguageServer):
         )
 
     @staticmethod
-    def get_issue_dict(project: Project, updated_after: str = None) -> Dict[int, GitlabIssue]:
+    def get_issue_dict(project: Project, updated_after: Optional[str] = None) -> Dict[int, GitlabIssue]:
         issue_dict = {}
 
-        logging.debug(f"Getting issue list for project: {project.path_with_namespace} from date: {updated_after}")
+        logging.debug(
+            f"Getting issue list for project: {project.path_with_namespace} from date: {updated_after}"
+        )
         if updated_after is None:
             issues = project.issues.list(iterator=True, get_all=True)
         else:
@@ -201,13 +202,15 @@ class GitlabLanguageServer(LanguageServer):
                 title=issue.title,
                 author=issue.author["name"],
                 open=(issue.state == "opened"),
-                description = issue.description,
+                description=issue.description,
             )
         logging.debug(f"Got {len(issue_dict.keys())} results")
         return issue_dict
 
     @staticmethod
-    def get_merge_request_dict(project: Project, updated_after: str = None) -> Dict[int, GitlabIssue]:
+    def get_merge_request_dict(
+        project: Project, updated_after: Optional[str] = None
+    ) -> Dict[int, GitlabIssue]:
         merge_request_dict = {}
         logging.debug(
             f"Getting merge request list for project: {project.path_with_namespace} from date: {updated_after}"
@@ -215,7 +218,7 @@ class GitlabLanguageServer(LanguageServer):
         if updated_after is None:
             merge_requests = project.mergerequests.list(iterator=True, get_all=True)
         else:
-            merge_requests = project.mergerequests.list(iterator= True, updated_after=updated_after)
+            merge_requests = project.mergerequests.list(iterator=True, updated_after=updated_after)
             logging.debug(f"Updated after={updated_after}")
         for mr in merge_requests:
             logging.debug(f"Got mr: {mr.iid}-{mr.title}-{mr.state}")
@@ -224,9 +227,9 @@ class GitlabLanguageServer(LanguageServer):
                 title=mr.title,
                 author=mr.author["name"],
                 open=(mr.state == "opened"),
-                description = mr.description,
+                description=mr.description,
             )
-            if mr.iid ==886:
+            if mr.iid == 886:
                 logging.debug(f"{mr}")
                 logging.debug(f"{merge_request_dict[mr.iid]}")
         logging.debug(f"Got {len(merge_request_dict.keys())} results")
@@ -242,6 +245,8 @@ server = GitlabLanguageServer("gitlab-ls", "v0.1")
 @server.feature(types.INITIALIZE)
 async def fetch_database(ls: GitlabLanguageServer, params: types.InitializeParams):
     init_options = params.initialization_options
+    if init_options is None:
+        return
     client = gitlab.Gitlab(url=init_options["url"], private_token=init_options["private_token"])
     ls.init_gitlab(client)
     ls.load_projects(init_options["projects"])
@@ -253,6 +258,8 @@ async def fetch_database(ls: GitlabLanguageServer, params: types.InitializeParam
 )
 def completions(ls: GitlabLanguageServer, params: types.CompletionParams):
     items = []
+    if params.context is None:
+        return
     match params.context.trigger_character:
         case "!":
             for project in ls.projects.values():
@@ -286,7 +293,11 @@ def diagnostics(ls: GitlabLanguageServer, params: types.DocumentDiagnosticParams
         issues = ls.get_issues_from_line(line)
         for issue, pos_start, pos_end in issues:
             message = "open" if issue.open else "closed"
-            severity = types.DiagnosticSeverity.Information if issue.open else types.DiagnosticSeverity.Error
+            severity = (
+                types.DiagnosticSeverity.Information
+                if issue.open
+                else types.DiagnosticSeverity.Error
+            )
 
             start = types.Position(line=line_nr, character=pos_start)
             end = types.Position(line=line_nr, character=pos_end)
@@ -303,6 +314,8 @@ def diagnostics(ls: GitlabLanguageServer, params: types.DocumentDiagnosticParams
 
 URL_RE_END_WORD = re.compile(r"^\S*")
 URL_RE_START_WORD = re.compile(r"\S*$")
+
+
 @server.feature(types.TEXT_DOCUMENT_HOVER)
 def hover(ls: GitlabLanguageServer, params: types.HoverParams):
     pos = params.position
@@ -328,7 +341,7 @@ def hover(ls: GitlabLanguageServer, params: types.HoverParams):
     return types.Hover(
         contents=types.MarkupContent(
             kind=types.MarkupKind.Markdown,
-            value= f"{issue.title}\n-----\n{issue.description}",
+            value=f"{issue.title}\n-----\n{issue.description}",
         ),
         range=types.Range(
             start=types.Position(line=pos.line, character=0),
