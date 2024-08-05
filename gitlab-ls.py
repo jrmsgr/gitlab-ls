@@ -24,25 +24,11 @@ class GitlabIssue:
     title: str
     author: str
     open: bool
+    description: str
 
     def to_completion_item(self):
         return types.CompletionItem(
             label=f"#{self.id} {self.title}",
-            kind=(types.CompletionItemKind.Method if self.open else types.CompletionItemKind.Text),
-        )
-
-
-@dataclass_json
-@dataclass
-class GitlabMergeRequest:
-    id: int
-    title: str
-    author: str
-    open: bool
-
-    def to_completion_item(self):
-        return types.CompletionItem(
-            label=f"!{self.id} {self.title}",
             kind=(types.CompletionItemKind.Method if self.open else types.CompletionItemKind.Text),
         )
 
@@ -54,7 +40,7 @@ class GitlabProject:
     path: str
     last_update: str
     issues: Dict[int, GitlabIssue]
-    merge_requests: Dict[int, GitlabMergeRequest]
+    merge_requests: Dict[int, GitlabIssue]
 
 
 class EnhancedJSONEncoder(json.JSONEncoder):
@@ -83,6 +69,33 @@ class GitlabLanguageServer(LanguageServer):
 
     def init_gitlab(self, client: gitlab.Gitlab):
         self.client = client
+        self.gitlab_url_regex = re.compile(r"\b" + f"{self.client.url}" + r"/([^ ]+)/-/(issues|merge_requests)/(\d+)\b")
+
+    def get_issue_from_url_match(self, m: re.Match[str] | None) -> Optional[GitlabIssue]:
+        if m is None:
+            return None
+        project_path = m.group(1)
+        if project_path not in self.projects:
+            return None
+        project = self.projects[project_path]
+        is_issue = m.group(2) == "issues"
+        iid = int(m.group(3))
+        issues = project.issues if is_issue else project.merge_requests
+        if iid not in issues:
+            return None
+        return project.issues[iid]
+
+    def get_issues_from_line(self, line: str) -> list[tuple[GitlabIssue, int, int]]:
+        issues = []
+        for m in self.gitlab_url_regex.finditer(line):
+            issue = self.get_issue_from_url_match(m)
+            if issue is not None:
+                issues.append((issue, m.start(), m.end()))
+        return issues
+
+    def get_issue_from_url(self, url: str) -> Optional[GitlabIssue]:
+        m = self.gitlab_url_regex.match(url)
+        return self.get_issue_from_url_match(m)
 
     def load_projects(self, projects: List[str]):
         progress = WorkProgress(token=1, increment=int(100 / len(projects)))
@@ -188,12 +201,13 @@ class GitlabLanguageServer(LanguageServer):
                 title=issue.title,
                 author=issue.author["name"],
                 open=(issue.state == "opened"),
+                description = issue.description,
             )
         logging.debug(f"Got {len(issue_dict.keys())} results")
         return issue_dict
 
     @staticmethod
-    def get_merge_request_dict(project: Project, updated_after: str = None) -> Dict[int, GitlabMergeRequest]:
+    def get_merge_request_dict(project: Project, updated_after: str = None) -> Dict[int, GitlabIssue]:
         merge_request_dict = {}
         logging.debug(
             f"Getting merge request list for project: {project.path_with_namespace} from date: {updated_after}"
@@ -210,6 +224,7 @@ class GitlabLanguageServer(LanguageServer):
                 title=mr.title,
                 author=mr.author["name"],
                 open=(mr.state == "opened"),
+                description = mr.description,
             )
             if mr.iid ==886:
                 logging.debug(f"{mr}")
@@ -265,32 +280,16 @@ def completions(ls: GitlabLanguageServer, params: types.CompletionParams):
     ),
 )
 def diagnostics(ls: GitlabLanguageServer, params: types.DocumentDiagnosticParams):
-    gitlab_url_regex = re.compile(r"\b" + f"{ls.client.url}" + r"/([^ ]+)/-/(issues|merge_requests)/(\d+)\b")
     doc = ls.workspace.get_text_document(params.text_document.uri)
     diagnostics = []
     for line_nr, line in enumerate(doc.lines):
-        for m in gitlab_url_regex.finditer(line):
-            # logging.debug("Found link")
-            project_path = m.group(1)
-            if project_path not in ls.projects:
-                continue
-            project = ls.projects[project_path]
-            is_issue = m.group(2) == "issues"
-            iid = int(m.group(3))
-            if is_issue:
-                if iid not in project.issues:
-                    continue
-                is_open = project.issues[iid].open
-            else:
-                if iid not in project.merge_requests:
-                    continue
-                is_open = project.merge_requests[iid].open
+        issues = ls.get_issues_from_line(line)
+        for issue, pos_start, pos_end in issues:
+            message = "open" if issue.open else "closed"
+            severity = types.DiagnosticSeverity.Information if issue.open else types.DiagnosticSeverity.Error
 
-            message = "open" if is_open else "closed"
-            severity = types.DiagnosticSeverity.Information if is_open else types.DiagnosticSeverity.Error
-
-            start = types.Position(line=line_nr, character=m.start())
-            end = types.Position(line=line_nr, character=m.end())
+            start = types.Position(line=line_nr, character=pos_start)
+            end = types.Position(line=line_nr, character=pos_end)
             diagnostics.append(
                 types.Diagnostic(
                     range=types.Range(start=start, end=end),
@@ -298,9 +297,44 @@ def diagnostics(ls: GitlabLanguageServer, params: types.DocumentDiagnosticParams
                     severity=severity,
                 )
             )
-            # logging.debug(f"{project_name}: {is_issue}, {iid}")
 
     return types.RelatedFullDocumentDiagnosticReport(items=diagnostics)
+
+
+URL_RE_END_WORD = re.compile(r"^\S*")
+URL_RE_START_WORD = re.compile(r"\S*$")
+@server.feature(types.TEXT_DOCUMENT_HOVER)
+def hover(ls: GitlabLanguageServer, params: types.HoverParams):
+    pos = params.position
+    document_uri = params.text_document.uri
+    document = ls.workspace.get_text_document(document_uri)
+
+    issue_url = document.word_at_position(pos, URL_RE_START_WORD, URL_RE_END_WORD)
+
+    m = ls.gitlab_url_regex.match(issue_url)
+    if m is None:
+        return None
+    project_path = m.group(1)
+    if project_path not in ls.projects:
+        return None
+    project = ls.projects[project_path]
+    is_issue = m.group(2) == "issues"
+    iid = int(m.group(3))
+    issues = project.issues if is_issue else project.merge_requests
+    if iid not in issues:
+        return None
+    issue = project.issues[iid]
+
+    return types.Hover(
+        contents=types.MarkupContent(
+            kind=types.MarkupKind.Markdown,
+            value= f"{issue.title}\n-----\n{issue.description}",
+        ),
+        range=types.Range(
+            start=types.Position(line=pos.line, character=0),
+            end=types.Position(line=pos.line + 1, character=0),
+        ),
+    )
 
 
 if __name__ == "__main__":
