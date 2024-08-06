@@ -17,7 +17,7 @@ import re
 
 @dataclass_json
 @dataclass
-class GitlabIssue:
+class GitlabObject:
     id: int
     title: str
     author: str
@@ -37,8 +37,8 @@ class GitlabProject:
     id: int
     path: str
     last_update: str
-    issues: Dict[int, GitlabIssue]
-    merge_requests: Dict[int, GitlabIssue]
+    issues: Dict[int, GitlabObject]
+    merge_requests: Dict[int, GitlabObject]
 
 
 @dataclass
@@ -64,7 +64,7 @@ class GitlabLanguageServer(LanguageServer):
             r"\b" + f"{self.client.url}" + r"/([^ ]+)/-/(issues|merge_requests)/(\d+)\b"
         )
 
-    def get_issue_from_url_match(self, m: re.Match[str] | None) -> Optional[GitlabIssue]:
+    def get_issue_from_url_match(self, m: re.Match[str] | None) -> Optional[GitlabObject]:
         if m is None:
             return None
         project_path = m.group(1)
@@ -78,7 +78,7 @@ class GitlabLanguageServer(LanguageServer):
             return None
         return project.issues[iid]
 
-    def get_issues_from_line(self, line: str) -> list[tuple[GitlabIssue, int, int]]:
+    def get_issues_from_line(self, line: str) -> list[tuple[GitlabObject, int, int]]:
         issues = []
         for m in self.gitlab_url_regex.finditer(line):
             issue = self.get_issue_from_url_match(m)
@@ -86,7 +86,7 @@ class GitlabLanguageServer(LanguageServer):
                 issues.append((issue, m.start(), m.end()))
         return issues
 
-    def get_issue_from_url(self, url: str) -> Optional[GitlabIssue]:
+    def get_issue_from_url(self, url: str) -> Optional[GitlabObject]:
         m = self.gitlab_url_regex.match(url)
         return self.get_issue_from_url_match(m)
 
@@ -185,7 +185,7 @@ class GitlabLanguageServer(LanguageServer):
         )
 
     @staticmethod
-    def get_issue_dict(project: Project, updated_after: Optional[str] = None) -> Dict[int, GitlabIssue]:
+    def get_issue_dict(project: Project, updated_after: Optional[str] = None) -> Dict[int, GitlabObject]:
         issue_dict = {}
 
         logging.debug(
@@ -197,7 +197,7 @@ class GitlabLanguageServer(LanguageServer):
             issues = project.issues.list(iterator=True, updated_after=updated_after)
 
         for issue in issues:
-            issue_dict[issue.iid] = GitlabIssue(
+            issue_dict[issue.iid] = GitlabObject(
                 id=issue.iid,
                 title=issue.title,
                 author=issue.author["name"],
@@ -210,7 +210,7 @@ class GitlabLanguageServer(LanguageServer):
     @staticmethod
     def get_merge_request_dict(
         project: Project, updated_after: Optional[str] = None
-    ) -> Dict[int, GitlabIssue]:
+            ) -> Dict[int, GitlabObject]:
         merge_request_dict = {}
         logging.debug(
             f"Getting merge request list for project: {project.path_with_namespace} from date: {updated_after}"
@@ -222,16 +222,13 @@ class GitlabLanguageServer(LanguageServer):
             logging.debug(f"Updated after={updated_after}")
         for mr in merge_requests:
             logging.debug(f"Got mr: {mr.iid}-{mr.title}-{mr.state}")
-            merge_request_dict[mr.iid] = GitlabIssue(
+            merge_request_dict[mr.iid] = GitlabObject(
                 id=mr.iid,
                 title=mr.title,
                 author=mr.author["name"],
                 open=(mr.state == "opened"),
                 description=mr.description,
             )
-            if mr.iid == 886:
-                logging.debug(f"{mr}")
-                logging.debug(f"{merge_request_dict[mr.iid]}")
         logging.debug(f"Got {len(merge_request_dict.keys())} results")
         return merge_request_dict
 
@@ -246,7 +243,8 @@ server = GitlabLanguageServer("gitlab-ls", "v0.1")
 async def fetch_database(ls: GitlabLanguageServer, params: types.InitializeParams):
     init_options = params.initialization_options
     if init_options is None:
-        return
+        ls.show_message("init_options is invalid", types.MessageType.Error)
+        exit(1)
     client = gitlab.Gitlab(url=init_options["url"], private_token=init_options["private_token"])
     ls.init_gitlab(client)
     ls.load_projects(init_options["projects"])
@@ -333,15 +331,15 @@ def hover(ls: GitlabLanguageServer, params: types.HoverParams):
     project = ls.projects[project_path]
     is_issue = m.group(2) == "issues"
     iid = int(m.group(3))
-    issues = project.issues if is_issue else project.merge_requests
-    if iid not in issues:
+    gitlab_objects = project.issues if is_issue else project.merge_requests
+    if iid not in gitlab_objects:
         return None
-    issue = project.issues[iid]
+    gitlab_object = gitlab_objects[iid]
 
     return types.Hover(
         contents=types.MarkupContent(
             kind=types.MarkupKind.Markdown,
-            value=f"{issue.title}\n-----\n{issue.description}",
+            value=f"{gitlab_object.title}\n-----\n{gitlab_object.description}",
         ),
         range=types.Range(
             start=types.Position(line=pos.line, character=0),
