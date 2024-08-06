@@ -60,9 +60,7 @@ class GitlabLanguageServer(LanguageServer):
 
     def init_gitlab(self, client: gitlab.Gitlab):
         self.client = client
-        self.gitlab_url_regex = re.compile(
-            r"\b" + f"{self.client.url}" + r"/([^ ]+)/-/(issues|merge_requests)/(\d+)\b"
-        )
+        self.gitlab_url_regex = re.compile(r"\b" + f"{self.client.url}" + r"/([^ ]+)/-/(issues|merge_requests)/(\d+)\b")
 
     def get_issue_from_url_match(self, m: re.Match[str] | None) -> Optional[GitlabObject]:
         if m is None:
@@ -95,9 +93,7 @@ class GitlabLanguageServer(LanguageServer):
         self.progress.create(progress.token)
         self.progress.begin(
             progress.token,
-            types.WorkDoneProgressBegin(
-                title="Database load", message="Starting progress", percentage=0
-            ),
+            types.WorkDoneProgressBegin(title="Database load", message="Starting progress", percentage=0),
         )
         cache = self.load_state()
         for project_name in cache:
@@ -188,9 +184,7 @@ class GitlabLanguageServer(LanguageServer):
     def get_issue_dict(project: Project, updated_after: Optional[str] = None) -> Dict[int, GitlabObject]:
         issue_dict = {}
 
-        logging.debug(
-            f"Getting issue list for project: {project.path_with_namespace} from date: {updated_after}"
-        )
+        logging.debug(f"Getting issue list for project: {project.path_with_namespace} from date: {updated_after}")
         if updated_after is None:
             issues = project.issues.list(iterator=True, get_all=True)
         else:
@@ -208,9 +202,7 @@ class GitlabLanguageServer(LanguageServer):
         return issue_dict
 
     @staticmethod
-    def get_merge_request_dict(
-        project: Project, updated_after: Optional[str] = None
-            ) -> Dict[int, GitlabObject]:
+    def get_merge_request_dict(project: Project, updated_after: Optional[str] = None) -> Dict[int, GitlabObject]:
         merge_request_dict = {}
         logging.debug(
             f"Getting merge request list for project: {project.path_with_namespace} from date: {updated_after}"
@@ -291,11 +283,7 @@ def diagnostics(ls: GitlabLanguageServer, params: types.DocumentDiagnosticParams
         issues = ls.get_issues_from_line(line)
         for issue, pos_start, pos_end in issues:
             message = "open" if issue.open else "closed"
-            severity = (
-                types.DiagnosticSeverity.Information
-                if issue.open
-                else types.DiagnosticSeverity.Error
-            )
+            severity = types.DiagnosticSeverity.Information if issue.open else types.DiagnosticSeverity.Error
 
             start = types.Position(line=line_nr, character=pos_start)
             end = types.Position(line=line_nr, character=pos_end)
