@@ -21,13 +21,13 @@ class GitlabObject:
     id: int
     title: str
     author: str
-    open: bool
+    state: str
     description: str
 
     def to_completion_item(self):
         return types.CompletionItem(
             label=f"#{self.id} {self.title}",
-            kind=(types.CompletionItemKind.Method if self.open else types.CompletionItemKind.Text),
+            kind=(types.CompletionItemKind.Method if self.state == "opened" else types.CompletionItemKind.Text),
         )
 
 
@@ -62,7 +62,7 @@ class GitlabLanguageServer(LanguageServer):
         self.client = client
         self.gitlab_url_regex = re.compile(r"\b" + f"{self.client.url}" + r"/([^ ]+)/-/(issues|merge_requests)/(\d+)\b")
 
-    def get_issue_from_url_match(self, m: re.Match[str] | None) -> Optional[GitlabObject]:
+    def get_gitlab_object_from_url_match(self, m: re.Match[str] | None) -> Optional[GitlabObject]:
         if m is None:
             return None
         project_path = m.group(1)
@@ -71,22 +71,22 @@ class GitlabLanguageServer(LanguageServer):
         project = self.projects[project_path]
         is_issue = m.group(2) == "issues"
         iid = int(m.group(3))
-        issues = project.issues if is_issue else project.merge_requests
-        if iid not in issues:
+        gitlab_objects = project.issues if is_issue else project.merge_requests
+        if iid not in gitlab_objects:
             return None
-        return project.issues[iid]
+        return gitlab_objects[iid]
 
-    def get_issues_from_line(self, line: str) -> list[tuple[GitlabObject, int, int]]:
-        issues = []
+    def get_gitlab_objects_from_line(self, line: str) -> list[tuple[GitlabObject, int, int]]:
+        gitlab_objects = []
         for m in self.gitlab_url_regex.finditer(line):
-            issue = self.get_issue_from_url_match(m)
-            if issue is not None:
-                issues.append((issue, m.start(), m.end()))
-        return issues
+            gitlab_object = self.get_gitlab_object_from_url_match(m)
+            if gitlab_object is not None:
+                gitlab_objects.append((gitlab_object, m.start(), m.end()))
+        return gitlab_objects
 
-    def get_issue_from_url(self, url: str) -> Optional[GitlabObject]:
+    def get_gitlab_object_from_url(self, url: str) -> Optional[GitlabObject]:
         m = self.gitlab_url_regex.match(url)
-        return self.get_issue_from_url_match(m)
+        return self.get_gitlab_object_from_url_match(m)
 
     def load_projects(self, projects: List[str]):
         progress = WorkProgress(token=1, increment=int(100 / len(projects)))
@@ -195,7 +195,7 @@ class GitlabLanguageServer(LanguageServer):
                 id=issue.iid,
                 title=issue.title,
                 author=issue.author["name"],
-                open=(issue.state == "opened"),
+                state=issue.state,
                 description=issue.description,
             )
         logging.debug(f"Got {len(issue_dict.keys())} results")
@@ -218,7 +218,7 @@ class GitlabLanguageServer(LanguageServer):
                 id=mr.iid,
                 title=mr.title,
                 author=mr.author["name"],
-                open=(mr.state == "opened"),
+                state=mr.state,
                 description=mr.description,
             )
         logging.debug(f"Got {len(merge_request_dict.keys())} results")
@@ -280,11 +280,15 @@ def diagnostics(ls: GitlabLanguageServer, params: types.DocumentDiagnosticParams
     doc = ls.workspace.get_text_document(params.text_document.uri)
     diagnostics = []
     for line_nr, line in enumerate(doc.lines):
-        issues = ls.get_issues_from_line(line)
-        for issue, pos_start, pos_end in issues:
-            message = "open" if issue.open else "closed"
-            severity = types.DiagnosticSeverity.Information if issue.open else types.DiagnosticSeverity.Error
-
+        gitlab_objects_and_pos = ls.get_gitlab_objects_from_line(line)
+        for gitlab_object, pos_start, pos_end in gitlab_objects_and_pos:
+            message = gitlab_object.state
+            if gitlab_object.state == "opened":
+                severity = types.DiagnosticSeverity.Hint
+            elif gitlab_object.state == "merged":
+                severity = types.DiagnosticSeverity.Information
+            else:
+                severity = types.DiagnosticSeverity.Error
             start = types.Position(line=line_nr, character=pos_start)
             end = types.Position(line=line_nr, character=pos_end)
             diagnostics.append(
@@ -308,21 +312,10 @@ def hover(ls: GitlabLanguageServer, params: types.HoverParams):
     document_uri = params.text_document.uri
     document = ls.workspace.get_text_document(document_uri)
 
-    issue_url = document.word_at_position(pos, URL_RE_START_WORD, URL_RE_END_WORD)
-
-    m = ls.gitlab_url_regex.match(issue_url)
-    if m is None:
-        return None
-    project_path = m.group(1)
-    if project_path not in ls.projects:
-        return None
-    project = ls.projects[project_path]
-    is_issue = m.group(2) == "issues"
-    iid = int(m.group(3))
-    gitlab_objects = project.issues if is_issue else project.merge_requests
-    if iid not in gitlab_objects:
-        return None
-    gitlab_object = gitlab_objects[iid]
+    url = document.word_at_position(pos, URL_RE_START_WORD, URL_RE_END_WORD)
+    gitlab_object = ls.get_gitlab_object_from_url(url)
+    if gitlab_object is None:
+        return
 
     return types.Hover(
         contents=types.MarkupContent(
