@@ -6,7 +6,7 @@ local gitlab_ls = {}
 
 local default_opts = {
   max_txt_len = 20,
-  opened_icon = "",
+  open_icon = "",
   closed_icon = "",
   override_cmp_items_highlight = false,
   server_config = {
@@ -53,7 +53,7 @@ function gitlab_ls.setup(opts)
       formatting = {
         format = function(_, vim_item)
           if vim_item.menu and is_project(vim_item.menu) then
-            local prefix = (vim_item.kind == "Method") and opts.opened_icon or opts.closed_icon
+            local prefix = (vim_item.kind == "Method") and opts.open_icon or opts.closed_icon
             if string.len(vim_item.word) > opts.max_txt_len then
               vim_item.abbr = string.sub(vim_item.word, 1, opts.max_txt_len) .. "..."
             end

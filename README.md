@@ -12,8 +12,8 @@ require("lazy").setup({
       -- Max length of a completion item in the popup window
       -- '...' is appended to the item if it is truncated
       max_txt_len = 20,
-      -- Icon symbol used in the completion popup for opened issues/merge requests
-      opened_icon = "",
+      -- Icon symbol used in the completion popup for open issues/merge requests
+      open_icon = "",
       -- Icon symbol used in the completion popup for closed issues/merge requests
       closed_icon = "",
       -- If true, changes the highlight of the completion items in the completion window to
