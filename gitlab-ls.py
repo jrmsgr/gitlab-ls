@@ -24,9 +24,9 @@ class GitlabObject:
     state: str
     description: str
 
-    def to_completion_item(self):
+    def to_completion_item(self, is_issue=False):
         return types.CompletionItem(
-            label=f"#{self.id} {self.title}",
+            label=f"{'#' if is_issue else '!'}{self.id} {self.title}",
             kind=(types.CompletionItemKind.Method if self.state == "opened" else types.CompletionItemKind.Text),
         )
 
@@ -102,7 +102,6 @@ class GitlabLanguageServer(LanguageServer):
             if idx is None:
                 continue
             logging.debug(f"Found project in cache: {project_name}")
-            logging.debug(f"cache: {cache[project_name]}")
             project = GitlabProject.from_dict(cache[project_name])
             self.projects[project.path] = project
             self.report_progress(progress, f"Updating {project.path}")
@@ -260,7 +259,7 @@ def completions(ls: GitlabLanguageServer, params: types.CompletionParams):
         case "#":
             for project in ls.projects.values():
                 for issue in project.issues.values():
-                    item = issue.to_completion_item()
+                    item = issue.to_completion_item(is_issue=True)
                     item.label_details = types.CompletionItemLabelDetails(detail=project.path)
                     items.append(item)
         case _:
