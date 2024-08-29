@@ -118,20 +118,24 @@ class GitlabLanguageServer(LanguageServer):
         if self.client is None:
             return
         project = self.projects[project_name]
+        # Subtract 2 days to account for any time disparities between client and server
+        # Don't know what is really the root of the issue, just noticed that in the case
+        # of self-hosted instance some MR/issues are missing unless the timestamp is set a couple days back
+        updated_after = datetime.datetime.fromisoformat(project.last_update) - datetime.timedelta(days=2)
         project.issues |= self.get_issue_dict(
             project=self.client.projects.get(project.id),
-            updated_after=project.last_update,
+            updated_after= self.get_timestamp(updated_after)
         )
         project.merge_requests |= self.get_merge_request_dict(
             project=self.client.projects.get(project.id),
-            updated_after=project.last_update,
+            updated_after=self.get_timestamp(updated_after),
         )
-        project.last_update = self.get_timestamp()
+        project.last_update = self.get_timestamp(datetime.datetime.now())
         self.projects[project_name] = project
 
     @staticmethod
-    def get_timestamp() -> str:
-        return datetime.datetime.now().replace(microsecond=0).isoformat()
+    def get_timestamp(date: datetime.datetime) -> str:
+        return date.replace(microsecond=0).isoformat()
 
     def fetch_projects(self, project_paths: List, progress: WorkProgress) -> None:
         self.report_progress(progress, "Fetching missing projects")
