@@ -139,6 +139,7 @@ class GitlabLanguageServer(LanguageServer):
 
     def fetch_projects(self, project_paths: List, progress: WorkProgress) -> None:
         self.report_progress(progress, "Fetching missing projects")
+        last_update = datetime.datetime.now()
         if self.client is None:
             return
         for fetched_project in self.client.projects.list(get_all=True):
@@ -155,7 +156,7 @@ class GitlabLanguageServer(LanguageServer):
                     path=fetched_project.path_with_namespace,
                     issues=issue_dict,
                     merge_requests=merge_request_dict,
-                    last_update=self.get_timestamp(),
+                    last_update=self.get_timestamp(last_update),
                 )
                 self.projects[project.path] = project
                 progress.advance()
